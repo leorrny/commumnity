@@ -7,12 +7,24 @@ from PIL import Image
 import requests
 from io import BytesIO
 import urllib.parse
+import json
+import openai
+import time
 
-# Function to validate API key
+# Function to validate Google Maps API key
 def is_valid_key(api_key):
     try:
         gmaps = googlemaps.Client(key=api_key)
         gmaps.geocode('New York')  # Test geocode request
+        return True
+    except Exception:
+        return False
+
+# Function to validate OpenAI API key
+def is_valid_openai_key(api_key):
+    try:
+        openai.api_key = api_key
+        openai.models.list()
         return True
     except Exception:
         return False
@@ -30,43 +42,30 @@ def get_places_details(gmaps, place_ids):
                 'num_ranking': details.get('user_ratings_total', 'N/A'),
                 'categories': ', '.join(details.get('types', [])),
                 'phone': details.get('formatted_phone_number', 'N/A'),
+                'reviews': details.get('reviews','N/A'),
                 'status': "Open" if details.get('opening_hours', {}).get('open_now') else "Closed",
                 'latitude': location.get('lat', 'N/A'),
                 'longitude': location.get('lng', 'N/A'),
                 'place_id': place_id,
-                'geometry': location,
                 'photos': details.get('photos', [])
             })
         except Exception:
-            pass  # Skip invalid place_ids
+            pass
     return places
 
 # Function to display a map with multiple markers
 def display_map(places):
     if places:
-        map_center = [places[0]['geometry']['lat'], places[0]['geometry']['lng']] if places[0].get('geometry') else [0, 0]
+        map_center = [places[0]['latitude'], places[0]['longitude']] if places[0].get('latitude') != 'N/A' else [0, 0]
         map_view = folium.Map(location=map_center, tiles="CartoDB positron", zoom_start=12)
         for place in places:
-            location = place.get('geometry')
-            if location:
+            location = place
+            if location.get('latitude') != 'N/A' and location.get('longitude') != 'N/A':
                 folium.Marker(
-                    [location['lat'], location['lng']],
+                    [location['latitude'], location['longitude']],
                     popup=place.get('name', 'Location')
                 ).add_to(map_view)
         st_folium(map_view, width=700)
-
-# Function to generate Google My Maps link
-def generate_google_maps_link(places):
-    base_url = "https://www.google.com/maps/d/u/0/edit"
-    markers = []
-    for place in places:
-        if place['latitude'] != 'N/A' and place['longitude'] != 'N/A':
-            name_encoded = urllib.parse.quote(place['name'])
-            markers.append(f"{place['latitude']},{place['longitude']},{name_encoded}")
-    if markers:
-        link = base_url + "?mid=1&ll=" + "&markers=".join(markers)
-        return link
-    return None
 
 # Function to fetch photos for a place
 def get_place_photos(gmaps, place_id):
@@ -81,101 +80,133 @@ def get_place_photos(gmaps, place_id):
             )
     return photo_urls
 
+# Function to categorize store with OpenAI
+def categorize_store_with_openai(place_info, photo_urls, prompt, api_key):
+    openai.api_key = api_key
+    messages = [
+        {
+            "role": "system",
+            "content": prompt
+        },
+        {
+            "role": "user",
+            "content": f"Store details from Google Maps:\n{json.dumps(place_info, indent=2)}",
+        }
+    ]
+    for url in photo_urls:
+        messages.append({"role": "user", "content": f"Photos of the place: {url}"})
+
+    try:
+        response = openai.chat.completions.create(
+            model='gpt-4o-mini',
+            messages=messages,
+            max_tokens=10000,
+            temperature =1,
+        top_p=1,
+        response_format={"type": "json_object"}
+        )
+        response_data = json.loads(response.choices[0].message.content)
+        return response_data
+    except Exception as e:
+        return {"error": str(e)}
+
 # Streamlit app
 def app():
-    st.title("Google Places Viewer")
+    st.title("Google Places Viewer with OpenAI Insights")
     
-    # Step 1: Input API Key
-    api_key = st.text_input("Enter your Google Maps API Key", type="password")
-    
-    if api_key:
-        # Step 2: Validate API Key
-        if is_valid_key(api_key):
-            st.success("API Key is valid!")
-            
-            # Step 3: Input up to 10 Place IDs
-            place_ids_input = st.text_area("Enter up to 20 Google Place IDs (one per line)").strip()
-            if place_ids_input:
-                place_ids = place_ids_input.splitlines()
-                if len(place_ids) > 20:
-                    st.error("Please enter up to 20 Place IDs.")
-                else:
-                    # Fetch details for the entered Place IDs
-                    gmaps = googlemaps.Client(key=api_key)
-                    places = get_places_details(gmaps, place_ids)
+    # Step 1: Input Google Maps API Key
+    gmaps_api_key = st.text_input("Enter your Google Maps API Key", type="password")
+    gmaps_valid = False
+    if gmaps_api_key:
+        if is_valid_key(gmaps_api_key):
+            st.success("Google Maps API Key is valid!")
+            gmaps_valid = True
+        else:
+            st.error("Invalid Google Maps API Key. Please try again.")
+
+    # Step 2: Optional: Input OpenAI API Key
+    openai_api_key = st.text_input("Enter your OpenAI API Key (Optional)" type="password")
+    openai_valid = False
+    if openai_api_key:
+        if is_valid_openai_key(openai_api_key):
+            st.success("OpenAI API Key is valid!")
+            openai_valid = True
+        else:
+            st.error("Invalid OpenAI API Key. Please try again.")
+
+    # Step 3: Input Place IDs
+    if gmaps_valid:
+        place_ids_input = st.text_area("Enter up to 20 Google Place IDs (one per line)").strip()
+        if place_ids_input:
+            place_ids = place_ids_input.splitlines()
+            if len(place_ids) > 20:
+                st.error("Please enter up to 20 Place IDs.")
+            else:
+                gmaps = googlemaps.Client(key=gmaps_api_key)
+                places = get_places_details(gmaps, place_ids)
+                if places:
+                    st.subheader("Locations on Map")
+                    display_map(places)
                     
-                    if places:
-                        # Step 4: Display map on the right
-                        st.subheader("Locations on Map")
-                        display_map(places)
+                    # Display Place Details
+                    st.subheader("Place Details")
+                    place_data = pd.DataFrame([
+                        {
+                            'Name': place['name'],
+                            'Rating': place['rating'],
+                            'Number of Reviews': place['num_ranking'],
+                            'Categories': place['categories'],
+                            'Phone': place['phone'],
+                            'Status': place['status'],
+                            'Latitude': place['latitude'],
+                            'Longitude': place['longitude'],
+                            'Place ID': place['place_id']
+                        } for place in places
+                    ])
+                    st.dataframe(place_data)
+
+                    # Step 4: OpenAI Analysis
+                    if openai_valid:
+                        st.subheader("Analyze with OpenAI")
+                        prompt = st.text_area("Modify the OpenAI query", value="""
+                        Use more direct language. You're mentoring sales representatives of a grocery, beverages, and tobacco distributor. 
+                        Analyze the store information and categorize it based on the following fields:
+                        - **Store Description**: Describe the store based on photos and data.
+                        - **Area Info**: Provide socio-demographic insights about the area.
+                        - **Store Potential**: Rate the store potential on a scale of 1-10.
+                        Return a structured JSON object containing 'Store Description', 'Area Info', and 'Store Potential'.
+                        """, height=200)
                         
-                        # Step 5: Display table on the left
-                        st.subheader("Place Details")
-                        place_data = pd.DataFrame([
-                            {
-                                'Name': place['name'],
-                                'Rating': place['rating'],
-                                'Number of Reviews': place['num_ranking'],
-                                'Categories': place['categories'],
-                                'Phone': place['phone'],
-                                'Status': place['status'],
-                                'Latitude': place['latitude'],
-                                'Longitude': place['longitude'],
-                                'Place ID': place['place_id']
-                            } for place in places
-                        ])
-                        
-                        # Interactive table
-                        st.write("Interactive Table")
-                        selected_rows = st.multiselect(
-                            "Select rows to delete:",
-                            place_data.index,
-                            format_func=lambda x: place_data.iloc[x]['Name']
-                        )
-                        
-                        if selected_rows:
-                            st.write("Rows to delete:")
-                            st.dataframe(place_data.loc[selected_rows])
-                        
-                        # Update the table after deleting selected rows
-                        updated_place_data = place_data.drop(selected_rows)
-                        st.write("Updated Table")
-                        st.dataframe(updated_place_data)
-                        
-                        # Step 6: Export the updated data
+                        results = []
+                        with st.spinner("Analyzing stores with OpenAI..."):
+                            for idx, place in enumerate(places):
+                                photo_urls = get_place_photos(gmaps, place['place_id'])
+                                response = categorize_store_with_openai(place, photo_urls, prompt, openai_api_key)
+                                results.append(response)
+                                time.sleep(1)  # Avoid hitting rate limits
+
+                        # Merge OpenAI results with place data
+                        openai_data = pd.DataFrame(results)
+                        combined_data = pd.concat([place_data, openai_data], axis=1)
+                        st.dataframe(combined_data)
+                        st.markdown("""
+    <style>
+        .stTable tr {
+            height: 50px; # use this to adjust the height
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+
+                        # Export data
                         st.download_button(
-                            label="Export Data as CSV",
-                            data=updated_place_data.to_csv(index=False),
-                            file_name="updated_places.csv",
+                            label="Export Combined Data as CSV",
+                            data=combined_data.to_csv(index=False),
+                            file_name="places_with_analysis.csv",
                             mime="text/csv"
                         )
-                        
-                        # Step 7: Show photos for selected places
-                        for idx, row in updated_place_data.iterrows():
-                            with st.expander(f"Show Photos for {row['Name']}"):
-                                place_id = row['Place ID']
-                                photos = get_place_photos(gmaps, place_id)
-                                if photos:
-                                    for photo_url in photos:
-                                        image = Image.open(BytesIO(requests.get(photo_url).content))
-                                        st.image(image, use_column_width=True)
-                                else:
-                                    st.write("No photos available.")
-
-                        # Step 8: Generate and display Google My Maps link
-                        st.subheader("Shareable Google My Maps Link")
-                        my_maps_link = generate_google_maps_link(places)
-                        if my_maps_link:
-                            st.write("Use the link below to view or share the map:")
-                            st.markdown(f"[View Map]({my_maps_link})", unsafe_allow_html=True)
-                        else:
-                            st.warning("Could not generate a map link. Ensure all places have valid coordinates.")
-                    else:
-                        st.warning("No valid places found. Please check your Place IDs.")
-        else:
-            st.error("Invalid API Key. Please try again.")
-    else:
-        st.info("Please enter your Google Maps API Key.")
+                else:
+                    st.warning("No valid places found. Please check your Place IDs.")
 
 if __name__ == "__main__":
     app()
