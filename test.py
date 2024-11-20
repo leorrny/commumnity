@@ -125,7 +125,7 @@ def app():
             st.error("Invalid Google Maps API Key. Please try again.")
 
     # Step 2: Optional: Input OpenAI API Key
-    openai_api_key = st.text_input("Enter your OpenAI API Key (Optional)" type="password")
+    openai_api_key = st.text_input("Enter your OpenAI API Key (Optional)", type="password")
     openai_valid = False
     if openai_api_key:
         if is_valid_openai_key(openai_api_key):
