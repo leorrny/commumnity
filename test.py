@@ -47,11 +47,23 @@ def get_places_details(gmaps, place_ids):
                 'latitude': location.get('lat', 'N/A'),
                 'longitude': location.get('lng', 'N/A'),
                 'place_id': place_id,
-                'photos': details.get('photos', [])
+                'photos': details.get('photos', []),
+                'url': details.get('url','n/a')
             })
         except Exception:
             pass
     return places
+
+def display_photos(places, gmaps):
+    st.subheader("Photos of Places")
+    for place in places:
+        with st.expander(f"Photos for {place['name']} ({place['place_id']})"):
+            photo_urls = get_place_photos(gmaps, place['place_id'])
+            if photo_urls:
+                for url in photo_urls:
+                    st.image(url, caption=place['name'], use_column_width=True)
+            else:
+                st.write("No photos available for this place.")
 
 # Function to display a map with multiple markers
 def display_map(places):
@@ -115,7 +127,7 @@ def app():
     st.title("Google Places Viewer with OpenAI Insights")
     
     # Step 1: Input Google Maps API Key
-    gmaps_api_key = st.text_input("Enter your Google Maps API Key", type="password")
+    gmaps_api_key = st.text_input("Enter your Google Maps API Key",type="password")
     gmaps_valid = False
     if gmaps_api_key:
         if is_valid_key(gmaps_api_key):
@@ -160,11 +172,13 @@ def app():
                             'Status': place['status'],
                             'Latitude': place['latitude'],
                             'Longitude': place['longitude'],
-                            'Place ID': place['place_id']
+                            'Place ID': place['place_id'],
+                            'url': place['url']
                         } for place in places
                     ])
                     st.dataframe(place_data)
 
+                    display_photos(places, gmaps)
                     # Step 4: OpenAI Analysis
                     if openai_valid:
                         st.subheader("Analyze with OpenAI")
@@ -196,6 +210,9 @@ def app():
         }
     </style>
 """, unsafe_allow_html=True)
+                        # Function to display photos with fold/unfold feature
+
+
 
 
                         # Export data
